@@ -1,10 +1,12 @@
 import React from 'react';
 import { View, Text, Button, StyleSheet } from 'react-native';
+import FloatingChat from '../components/FloatingChat'; // Asegúrate de la ruta correcta
 
 const HomeScreen = ({ navigation }) => {
   return (
     <View style={styles.container}>
       <Text style={styles.title}>Pantalla de Inicio</Text>
+      
       <Button
         title="Ir a Perfil"
         onPress={() => navigation.navigate('Profile')}
@@ -13,12 +15,13 @@ const HomeScreen = ({ navigation }) => {
         title="Ir a Configuración"
         onPress={() => navigation.navigate('Settings')}
       />
-
       <Button
         title="Ir a Loggear"
         onPress={() => navigation.navigate('Login')}
       />
 
+      {/* Floating chat: siempre al final */}
+      <FloatingChat visible={true} fullScreen={false} />
     </View>
   );
 };
