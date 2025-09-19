@@ -1,5 +1,5 @@
-const API_BASE_URL = 'http://localhost:3001/api/v1'; // Para emulador
-// const API_BASE_URL = 'http://tu-ip-local:3001/api/v1'; // Para dispositivo físico
+//const API_BASE_URL = 'http://localhost:3001/api/v1'; // Para emulador
+const API_BASE_URL = 'http://192.168.50.139:3001/api/v1'; // Para dispositivo físico
 
 class ChatService {
   // Enviar mensaje al chatbot

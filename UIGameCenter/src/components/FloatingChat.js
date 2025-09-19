@@ -1,33 +1,98 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { 
-  View, Text, TextInput, TouchableOpacity, FlatList, StyleSheet,
-  KeyboardAvoidingView, Platform, Animated, Easing
+import {
+  View,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  FlatList,
+  StyleSheet,
+  KeyboardAvoidingView,
+  Platform,
+  Animated,
+  Easing,
+  Dimensions,
 } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import ChatService from '../services/ChatService';
 
+const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
+
 const FloatingChat = ({ visible = true, fullScreen = false }) => {
-  const [isOpen, setIsOpen] = useState(false);
+  // UI / data state
+  const [mounted, setMounted] = useState(false); // controla si el contenedor está montado
+  const [isOpen, setIsOpen] = useState(false);   // estado lógico abierto/cerrado
   const [messages, setMessages] = useState([]);
   const [inputText, setInputText] = useState('');
   const [loading, setLoading] = useState(false);
   const [connected, setConnected] = useState(false);
-  const flatListRef = useRef();
 
-  const animation = useRef(new Animated.Value(0)).current;
+  const flatListRef = useRef(null);
 
+  // animaciones (scale + opacity funcionan bien en web y móvil)
+  const scaleAnim = useRef(new Animated.Value(0)).current;
+  const opacityAnim = useRef(new Animated.Value(0)).current;
+
+  // Abre / cierra: montamos el contenedor antes de animar al abrir,
+  // y lo desmontamos al terminar la animación al cerrar.
+  const toggleChat = () => {
+    if (!mounted) {
+      // abrir: montar -> animar a 1
+      setMounted(true);
+      setIsOpen(true);
+      Animated.parallel([
+        Animated.timing(scaleAnim, {
+          toValue: 1,
+          duration: 250,
+          easing: Easing.out(Easing.ease),
+          useNativeDriver: true,
+        }),
+        Animated.timing(opacityAnim, {
+          toValue: 1,
+          duration: 200,
+          useNativeDriver: true,
+        }),
+      ]).start();
+    } else {
+      // cerrar: animar a 0 -> desmontar en callback
+      Animated.parallel([
+        Animated.timing(scaleAnim, {
+          toValue: 0,
+          duration: 200,
+          easing: Easing.in(Easing.ease),
+          useNativeDriver: true,
+        }),
+        Animated.timing(opacityAnim, {
+          toValue: 0,
+          duration: 180,
+          useNativeDriver: true,
+        }),
+      ]).start(() => {
+        setIsOpen(false);
+        setMounted(false);
+      });
+    }
+  };
+
+  // Cuando el contenedor se monta (se abre), comprobamos conexión
   useEffect(() => {
     if (!visible) return;
-    checkConnection();
-  }, [visible]);
+    if (mounted) {
+      checkConnection();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mounted, visible]);
 
+  // Health check
   const checkConnection = async () => {
     try {
       const health = await ChatService.checkHealth();
-      setConnected(health.status === 'OK');
-      if (health.status === 'OK') {
+      const ok = health && health.status === 'OK';
+      setConnected(ok);
+      // Añadir saludo solo la primera vez (si no hay mensajes)
+      if (ok && messages.length === 0) {
         addMessage('¡Hola! Soy tu asistente gamer. ¿En qué puedo ayudarte?', 'bot');
       }
-    } catch (error) {
+    } catch (err) {
       setConnected(false);
     }
   };
@@ -46,7 +111,9 @@ const FloatingChat = ({ visible = true, fullScreen = false }) => {
 
     try {
       const response = await ChatService.sendMessage(userMessage);
-      addMessage(response.response, 'bot');
+      // espera la estructura que devuelva tu backend; aquí usamos response.response como antes
+      const botText = response?.response ?? response?.reply ?? 'Lo siento, no obtuve respuesta.';
+      addMessage(botText, 'bot');
     } catch (error) {
       addMessage('Lo siento, hubo un error. Intenta de nuevo.', 'bot');
     }
@@ -54,91 +121,115 @@ const FloatingChat = ({ visible = true, fullScreen = false }) => {
     setLoading(false);
   };
 
+  // autoscroll a final cuando cambian mensajes
   useEffect(() => {
     if (flatListRef.current && messages.length > 0) {
-      flatListRef.current.scrollToEnd({ animated: true });
+      // scrollToEnd funciona en RN; en web a veces requiere small timeout
+      setTimeout(() => {
+        try {
+          flatListRef.current.scrollToEnd({ animated: true });
+        } catch (e) {
+          // fallback para plataformas donde scrollToEnd no está disponible
+          // (no hacemos nada, el usuario puede scrollear)
+        }
+      }, 40);
     }
   }, [messages]);
 
-  const toggleChat = () => {
-    setIsOpen(!isOpen);
-    Animated.timing(animation, {
-      toValue: isOpen ? 0 : 1,
-      duration: 300,
-      easing: Easing.out(Easing.ease),
-      useNativeDriver: true, // usar transform evita scroll flash
-    }).start();
-  };
-
   if (!visible) return null;
 
-  const scaleY = animation.interpolate({
-    inputRange: [0, 1],
-    outputRange: [0, 1],
-  });
+  // dimensiones: web más estrecho y más alto; móvil más ancho y menos alto
+  const chatWidth = fullScreen
+    ? SCREEN_WIDTH * 0.95
+    : Platform.OS === 'web'
+    ? Math.min(480, SCREEN_WIDTH * 0.35) // límite ancho en web
+    : SCREEN_WIDTH * 0.9;
 
-  const renderMessage = ({ item }) => (
-    <View style={[styles.messageContainer, item.sender === 'user' ? styles.userMessage : styles.botMessage]}>
-      <Text style={[styles.messageText, item.sender === 'user' ? styles.userText : styles.botText]}>
-        {item.text}
-      </Text>
-    </View>
-  );
+  const chatHeight = fullScreen
+    ? SCREEN_HEIGHT * 0.85
+    : Platform.OS === 'web'
+    ? SCREEN_HEIGHT * 0.75
+    : SCREEN_HEIGHT * 0.6;
 
   return (
     <>
-      {!isOpen && (
-        <TouchableOpacity style={styles.floatingButton} onPress={toggleChat}>
-          <Text style={styles.floatingButtonText}>💬</Text>
+      {/* FAB - Solo visible cuando el chat NO está abierto */}
+      {!mounted && (
+        <TouchableOpacity
+          style={styles.floatingButton}
+          onPress={toggleChat}
+          activeOpacity={0.85}
+        >
+          <Ionicons name="chatbubble-ellipses-outline" size={28} color="#fff" />
         </TouchableOpacity>
       )}
 
-      <Animated.View
-        style={[
-          styles.chatContainer,
-          { transform: [{ scaleY }], height: fullScreen ? 600 : 500, width: fullScreen ? 360 : 350 }
-        ]}
-      >
-        <KeyboardAvoidingView 
-          style={styles.innerContainer}
-          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      {/* Contenedor animado: solo renderiza si mounted === true */}
+      {mounted && (
+        <Animated.View
+          style={[
+            styles.chatContainer,
+            {
+              width: chatWidth,
+              height: chatHeight,
+              transform: [{ scale: scaleAnim }],
+              opacity: opacityAnim,
+            },
+          ]}
         >
-          <View style={styles.chatHeader}>
-            <Text style={styles.headerText}>Gaming Assistant</Text>
-            <TouchableOpacity onPress={toggleChat}>
-              <Text style={styles.closeText}>✕</Text>
-            </TouchableOpacity>
-          </View>
+          <KeyboardAvoidingView
+            style={styles.innerContainer}
+            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          >
+            <View style={styles.chatHeader}>
+              <Text style={styles.headerText}>Gaming Assistant</Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                {/* indicador de conexión */}
+                <View style={[styles.statusDot, connected ? styles.statusOk : styles.statusErr]} />
+                <TouchableOpacity onPress={toggleChat} style={{ marginLeft: 10 }}>
+                  <Ionicons name="close" size={20} color="#fff" />
+                </TouchableOpacity>
+              </View>
+            </View>
 
-          <FlatList
-            ref={flatListRef}
-            data={messages}
-            renderItem={renderMessage}
-            keyExtractor={item => item.id}
-            style={styles.messagesList}
-          />
-
-          <View style={styles.inputContainer}>
-            <TextInput
-              style={styles.textInput}
-              placeholder="Pregunta sobre videojuegos..."
-              placeholderTextColor="#9aa0a6"
-              value={inputText}
-              onChangeText={setInputText}
-              multiline
-              maxLength={1000}
-              editable={!loading && connected}
+            <FlatList
+              ref={flatListRef}
+              data={messages}
+              renderItem={({ item }) => (
+                <View style={[styles.messageContainer, item.sender === 'user' ? styles.userMessage : styles.botMessage]}>
+                  <Text style={[styles.messageText, item.sender === 'user' ? styles.userText : styles.botText]}>
+                    {item.text}
+                  </Text>
+                </View>
+              )}
+              keyExtractor={item => item.id}
+              style={styles.messagesList}
+              contentContainerStyle={{ paddingVertical: 8 }}
+              keyboardShouldPersistTaps="handled"
             />
-            <TouchableOpacity
-              style={[styles.sendButton, { opacity: (!inputText.trim() || loading || !connected) ? 0.5 : 1 }]}
-              onPress={sendMessage}
-              disabled={!inputText.trim() || loading || !connected}
-            >
-              <Text style={styles.sendButtonText}>{loading ? '...' : 'Enviar'}</Text>
-            </TouchableOpacity>
-          </View>
-        </KeyboardAvoidingView>
-      </Animated.View>
+
+            <View style={[styles.inputContainer, Platform.OS === 'web' ? styles.inputBorderTop : null]}>
+              <TextInput
+                style={styles.textInput}
+                placeholder={connected ? "Pregunta sobre videojuegos..." : "Conectando..."}
+                placeholderTextColor="#9aa0a6"
+                value={inputText}
+                onChangeText={setInputText}
+                multiline
+                maxLength={1000}
+                editable={!loading && connected}
+              />
+              <TouchableOpacity
+                style={[styles.sendButton, { opacity: (!inputText.trim() || loading || !connected) ? 0.5 : 1 }]}
+                onPress={sendMessage}
+                disabled={!inputText.trim() || loading || !connected}
+              >
+                <Ionicons name={loading ? "reload" : "send"} size={18} color="#fff" />
+              </TouchableOpacity>
+            </View>
+          </KeyboardAvoidingView>
+        </Animated.View>
+      )}
     </>
   );
 };
@@ -146,59 +237,128 @@ const FloatingChat = ({ visible = true, fullScreen = false }) => {
 const styles = StyleSheet.create({
   floatingButton: {
     position: 'absolute',
-    bottom: 30,
-    right: 20,
-    backgroundColor: "#875ff5",
-    width: 60,
-    height: 60,
-    borderRadius: 30,
+    bottom: 26,
+    right: 18,
+    backgroundColor: '#7b2ff7',
+    width: 64,
+    height: 64,
+    borderRadius: 32,
     justifyContent: 'center',
     alignItems: 'center',
-    zIndex: 1000,
+    zIndex: 1200,
     shadowColor: '#000',
     shadowOpacity: 0.25,
     shadowOffset: { width: 0, height: 3 },
     shadowRadius: 8,
-    elevation: 6,
+    elevation: 8,
   },
-  floatingButtonText: { color: '#fff', fontSize: 28 },
   chatContainer: {
     position: 'absolute',
-    bottom: 30,
-    right: 20,
-    zIndex: 1000,
-    backgroundColor: 'rgba(20,22,28,0.95)',
+    bottom: Platform.OS === 'web' ? 60 : 30,
+    right: Platform.OS === 'web' ? 28 : 20,
+    zIndex: 1200,
+    backgroundColor: '#111427',
     borderRadius: 14,
     overflow: 'hidden',
     shadowColor: '#000',
-    shadowOpacity: 0.4,
-    shadowOffset: { width: 0, height: 5 },
-    shadowRadius: 12,
-    elevation: 10,
+    shadowOpacity: 0.45,
+    shadowOffset: { width: 0, height: 6 },
+    shadowRadius: 14,
+    elevation: 12,
+    // Border fijo - no controlado por estado mounted
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.03)',
+    borderColor: 'rgba(255,255,255,0.05)',
   },
-  innerContainer: { flex: 1 },
-  chatHeader: { 
-    flexDirection: 'row', 
-    justifyContent: 'space-between', 
-    alignItems: 'center', 
-    backgroundColor: 'rgba(135,95,245,0.8)', 
-    padding: 12 
+  innerContainer: { 
+    flex: 1 
   },
-  headerText: { color: '#fff', fontWeight: '700', fontSize: 16 },
-  closeText: { color: '#fff', fontSize: 18 },
-  messagesList: { flex: 1, paddingHorizontal: 8, paddingVertical: 6 },
-  messageContainer: { marginVertical: 4, padding: 10, borderRadius: 20, maxWidth: '80%' },
-  userMessage: { backgroundColor: 'rgba(137,197,244,0.2)', alignSelf: 'flex-end', borderTopRightRadius: 0 },
-  botMessage: { backgroundColor: 'rgba(255,255,255,0.05)', alignSelf: 'flex-start', borderTopLeftRadius: 0, borderWidth: 1, borderColor: 'rgba(255,255,255,0.03)' },
-  messageText: { fontSize: 16 },
-  userText: { color: '#dbe6ee' },
-  botText: { color: '#fff' },
-  inputContainer: { flexDirection: 'row', padding: 8, backgroundColor: 'rgba(255,255,255,0.02)', borderTopWidth: 1, borderTopColor: 'rgba(255,255,255,0.03)' },
-  textInput: { flex: 1, borderWidth: 1, borderColor: 'rgba(255,255,255,0.03)', borderRadius: 12, paddingHorizontal: 12, paddingVertical: 8, marginRight: 6, color: '#dbe6ee', fontSize: 14 },
-  sendButton: { backgroundColor: '#875ff5', borderRadius: 12, paddingHorizontal: 16, justifyContent: 'center', alignItems: 'center' },
-  sendButtonText: { color: '#fff', fontWeight: '700' },
+  chatHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#7b2ff7',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  headerText: { 
+    color: '#fff', 
+    fontWeight: '700', 
+    fontSize: 16 
+  },
+  statusDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 6,
+    marginRight: 8,
+  },
+  statusOk: { 
+    backgroundColor: '#4ade80' 
+  },
+  statusErr: { 
+    backgroundColor: '#ef4444' 
+  },
+  messagesList: {
+    flex: 1,
+    paddingHorizontal: 10,
+    backgroundColor: 'transparent',
+  },
+  messageContainer: {
+    marginVertical: 6,
+    padding: 10,
+    borderRadius: 14,
+    maxWidth: '80%',
+  },
+  userMessage: {
+    backgroundColor: '#532cbb',
+    alignSelf: 'flex-end',
+    borderTopRightRadius: 0,
+  },
+  botMessage: {
+    backgroundColor: '#1f2235',
+    alignSelf: 'flex-start',
+    borderTopLeftRadius: 0,
+  },
+  messageText: { 
+    fontSize: 15,
+    lineHeight: 20,
+  },
+  userText: { 
+    color: '#fff' 
+  },
+  botText: { 
+    color: '#e1e1e1' 
+  },
+  inputContainer: {
+    flexDirection: 'row',
+    padding: 8,
+    backgroundColor: '#1a1d2e',
+  },
+  inputBorderTop: {
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255,255,255,0.05)',
+  },
+  textInput: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.05)',
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    marginRight: 6,
+    color: '#fff',
+    fontSize: 14,
+    minHeight: 40,
+    maxHeight: 120,
+    backgroundColor: 'rgba(255,255,255,0.02)',
+  },
+  sendButton: {
+    backgroundColor: '#7b2ff7',
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    justifyContent: 'center',
+    alignItems: 'center',
+    minWidth: 48,
+  },
 });
 
 export default FloatingChat;
